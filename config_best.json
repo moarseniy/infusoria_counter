@@ -1,0 +1,43 @@
+{
+    "settings": {
+        "debug": false
+    },
+    "preprocess": {
+        "clahe": {
+            "to_use": true,
+            "clipLimit": 5.885169868178421, 
+            "tileGridSize": 3
+        },
+        "gauss": {
+            "to_use": true,
+            "kernel": 1,
+            "sigma": 0
+        },
+        "canny": {
+            "to_use": true,
+            "left": 133,
+            "right": 276,
+            "apertureSize": 3
+        },
+        "dilate": {
+            "to_use": true,
+            "kernel": 5,
+            "iterations": 1
+        },
+        "close": {
+            "to_use": true,
+            "kernel": 3,
+            "iterations": 5
+        },
+        "erode": {
+            "to_use": true,
+            "kernel": 3,
+            "iterations": 5
+        },
+        "hough": {
+            "threshold": 774, 
+            "minLineLength": 147, 
+            "maxLineGap": 59
+        }
+    }
+}

@@ -1,0 +1,34 @@
+{
+    "preprocess": {
+        "clahe": {
+            "clipLimit": 7.87, 
+            "tileGridSize": 4,
+        },
+        "gauss": {
+            "kernel": 5,
+            "sigma": 0
+        },
+        "canny": {
+            "left": 13,
+            "right": 186,
+            "apertureSize": 3
+        },
+        "dilate": {
+            "kernel": 3,
+            "iterations": 3
+        },
+        "close": {
+            "kernel": 1,
+            "iterations": 2
+        },
+        "erode": {
+            "kernel": 5,
+            "iterations": 4
+        },
+        "hough": {
+            "threshold": 530, 
+            "minLineLength": 366, 
+            "maxLineGap": 70
+        }
+    }
+}
