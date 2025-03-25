@@ -1,32 +1,36 @@
 {
     "settings": {
-        "debug": false
+        "debug": true
     },
     "preprocess": {
         "clahe": {
             "to_use": true,
-            "clipLimit": 5.885169868178421, 
+            "clipLimit": 7.873948323780682, 
             "tileGridSize": 3
         },
         "gauss": {
             "to_use": true,
-            "kernel": 1,
+            "kernel": 3,
             "sigma": 0
         },
         "adaptive_thresh": {
             "to_use": true,
-            "blockSize": 11,
-            "const": 2
+            "blockSize": 17,
+            "const": 10
         },
-        "dilate": {
+        "close": {
             "to_use": true,
             "kernel": 5,
             "iterations": 1
         },
-        "erode": {
+        "findContours": {
             "to_use": true,
-            "kernel": 3,
-            "iterations": 5
+            "area": 1591
+        },
+        "dilate": {
+            "to_use": true,
+            "kernel": 1,
+            "iterations": 3
         },
         "hough": {
             "threshold": 774, 

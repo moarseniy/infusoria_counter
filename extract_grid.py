@@ -2,10 +2,33 @@ import cv2
 import numpy as np
 
 # Загрузка исходного изображения
-img = cv2.imread('2.jpg', cv2.IMREAD_GRAYSCALE)
+img = cv2.imread('2.jpg')
+gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 if img is None:
     print("Не удалось загрузить изображение.")
     exit()
+
+pattern_size = (6, 6)  # Укажите ваши значения!
+
+# Поиск углов
+found, corners = cv2.findChessboardCorners(
+    gray,
+    pattern_size,
+    flags=cv2.CALIB_CB_ADAPTIVE_THRESH + cv2.CALIB_CB_NORMALIZE_IMAGE
+)
+
+if found:
+    # Уточнение координат углов (субпиксельная точность)
+    criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001)
+    cv2.cornerSubPix(gray, corners, (11, 11), (-1, -1), criteria)
+    
+    # Отрисовка углов
+    cv2.drawChessboardCorners(img, pattern_size, corners, found)
+    cv2.imshow('Chessboard Corners', img)
+    cv2.waitKey(0)
+else:
+    print("Углы не найдены! Проверьте параметры.")
+exit(-1)
 
 # Применяем гауссово размытие для уменьшения шума
 blur = cv2.GaussianBlur(img, (3, 3), 0)

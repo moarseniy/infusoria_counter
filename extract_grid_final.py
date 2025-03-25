@@ -50,7 +50,7 @@ def preprocess_image2(image_path, params, use_debug):
         # Адаптивная бинаризация
         img = cv2.adaptiveThreshold(
             img, 255, 
-            cv2.ADAPTIVE_THRESH_MEAN_C, 
+            cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
             cv2.THRESH_BINARY_INV, params["adaptive_thresh"]["blockSize"], 
                                    params["adaptive_thresh"]["const"]
         )
@@ -75,8 +75,9 @@ def preprocess_image2(image_path, params, use_debug):
 
     kernel = np.ones((3, 3), np.uint8)
     img = cv2.morphologyEx(img, cv2.MORPH_CLOSE, kernel, iterations=3)
-    cv2.imshow("close", resize_image_to_fit(img))
-    cv2.waitKey(0)
+    if use_debug:
+        cv2.imshow("close", resize_image_to_fit(img))
+        cv2.waitKey(0)
 
     # img = skeletonize(img // 255) 
     # cv2.imshow("skeletonize", resize_image_to_fit(img))
@@ -478,7 +479,7 @@ def average_close_points(img, points, use_debug=False, radius=20, min_points=2):
         #     cv2.destroyAllWindows()
         
     
-    return np.array(averaged_points)
+    return averaged_points
 
 def sort_points(points):
     """
@@ -503,29 +504,264 @@ def sort_points(points):
     # Объединяем точки в нужном порядке
     return np.array([upper_points[0], upper_points[1], lower_points[0], lower_points[1]])
 
+from sklearn.cluster import KMeans
+from sklearn.decomposition import PCA
+from scipy.spatial import KDTree
+
+def get_line_points(points, row, col):
+    points = np.array(points)
+    
+    # Получаем все точки из строки (по Y)
+    sorted_y = points[np.argsort(-points[:, 1])]
+    y_values = sorted(np.unique(points[:, 1]), reverse=True)
+    row_points = points[points[:, 1] == y_values[row]]
+    
+    # Получаем все точки из столбца (по X)
+    sorted_x = points[np.argsort(points[:, 0])]
+    x_values = sorted(np.unique(points[:, 0]))
+    col_points = points[points[:, 0] == x_values[col]]
+    
+    return row_points.tolist(), col_points.tolist()
+
+def find_two_lines_intersection(line1_points, line2_points):
+    """
+    Находит точку пересечения двух прямых.
+    
+    Параметры:
+    line1_points: tuple of two points [(x1, y1), (x2, y2)] - первая прямая
+    line2_points: tuple of two points [(x3, y3), (x4, y4)] - вторая прямая
+    
+    Возвращает:
+    (x, y) - координаты точки пересечения или None, если прямые параллельны
+    """
+    # Разбираем точки на координаты
+    (x1, y1), (x2, y2) = line1_points
+    (x3, y3), (x4, y4) = line2_points
+    
+    # Вычисляем коэффициенты уравнений прямых
+    A1 = y2 - y1
+    B1 = x1 - x2
+    C1 = A1 * x1 + B1 * y1
+    
+    A2 = y4 - y3
+    B2 = x3 - x4
+    C2 = A2 * x3 + B2 * y3
+    
+    # Решаем систему уравнений
+    determinant = A1 * B2 - A2 * B1
+    
+    if abs(determinant) < 1e-6:  # Прямые параллельны или совпадают
+        return None
+    
+    x = (B2 * C1 - B1 * C2) / determinant
+    y = (A1 * C2 - A2 * C1) / determinant
+    
+    return (x, y)
+
+def find_missing_point(points):
+    points = np.array(points)
+    
+    # 1. Сортируем точки по Y (сверху вниз) и X (слева направо)
+    sorted_y = points[np.argsort(-points[:, 1])]  # Сортировка по Y (ось направлена вниз)
+    sorted_x = points[np.argsort(points[:, 0])]   # Сортировка по X
+    
+    # 2. Вычисляем средние расстояния между соседями
+    y_distances = np.diff(sorted_y[:, 1])
+    x_distances = np.diff(sorted_x[:, 0])
+    avg_y_dist = np.median(y_distances[y_distances > 0]) if np.any(y_distances > 0) else 0
+    avg_x_dist = np.median(x_distances[x_distances > 0]) if np.any(x_distances > 0) else 0
+    
+    # 3. Строим ожидаемую сетку
+    min_x, min_y = np.min(points[:, 0]), np.min(points[:, 1])
+    max_x, max_y = np.max(points[:, 0]), np.max(points[:, 1])
+    
+    # Генерируем все возможные точки сетки
+    expected_points = []
+    for y in np.linspace(max_y, min_y, 3):  # 3 строки (Y вниз)
+        for x in np.linspace(min_x, max_x, 3):  # 3 столбца
+            expected_points.append([x, y])
+    expected_points = np.array(expected_points)
+    
+    # print(expected_points)
+
+    # 4. Ищем ближайшие реальные точки для каждой ожидаемой
+    tree = KDTree(points)
+    distances, indices = tree.query(expected_points, k=1)
+    # print("distances", distances)
+    # print("indices", indices)
+    # 5. Находим ожидаемую точку с максимальным расстоянием до ближайшей реальной
+    missing_idx = np.argmax(distances)
+    # print("missing_idx", missing_idx)
+    # 6. Определяем позицию в сетке (строка, столбец)
+    row = missing_idx // 3  # Строки 0-2 (0 - верхняя)
+    col = missing_idx % 3       # Столбцы 0-2 (0 - левый)
+    # print("row, col", row, col)
+
+    missing_point = expected_points[missing_idx]
+    # print("MISSING POINT", missing_point)
+
+    row_indices = [row * 3 + 0, row * 3 + 1, row * 3 + 2] # 0,1,2 для row=0; 3,4,5 для row=1 и т.д.    
+    row_points = expected_points[row_indices]
+    # print("row_points", row_points)
+    row_points = row_points[[not np.array_equal(p, missing_point) for p in row_points]]
+    # print("row_points", row_points)
+
+    _, row_indices_query = KDTree(points).query(row_points, k=1)
+    # print("Closest row: ", row_points, row_indices_query)
+
+    col_indices = [col + 0, col + 3, col + 6]  # 0,3,6 для col=0; 1,4,7 для col=1 и т.д.
+    col_points = expected_points[col_indices]
+    # print("col_points", col_points)
+    col_points = col_points[[not np.array_equal(p, missing_point) for p in col_points]]
+    # print("col_points", col_points)
+
+    _, col_indices_query = KDTree(points).query(col_points, k=1)
+    # print("Closest col: ", col_points, col_indices_query)
+    
+    # print("col", points[col_indices_query].tolist())
+
+    # print("row", points[row_indices_query].tolist())
+    
+    res_missing_point = find_two_lines_intersection(points[col_indices_query].tolist(), 
+                                                    points[row_indices_query].tolist())
+
+    return np.array(res_missing_point, dtype=int)
+
+    # row_y = expected_points[row * 3][1]
+    # # Находим все точки с Y-координатой близкой к строке
+    # y_distances = np.abs(points[:, 1] - row_y)
+    # close_points = points[y_distances < np.median(y_distances) * 1.5]
+    # print("close_points", close_points)
+
+    
+
+# def find_missing_point(points):
+#     points = np.array(points)
+    
+#     # Кластеризация по Y для определения строк
+#     kmeans_rows = KMeans(n_clusters=3, random_state=0).fit(points[:, 1].reshape(-1, 1))
+#     rows = [[] for _ in range(3)]
+#     for pt, label in zip(points, kmeans_rows.labels_):
+#         rows[label].append(pt)
+    
+#     # Убедимся, что есть ровно 3 строки
+#     rows = [r for r in rows if len(r) > 0]
+#     if len(rows) != 3:
+#         raise ValueError("Невозможно определить 3 строки в сетке")
+    
+#     # Сортировка строк сверху вниз
+#     row_y_means = [np.mean([pt[1] for pt in row]) for row in rows]
+#     rows = [rows[i] for i in np.argsort(row_y_means)[::-1]]
+    
+#     # Построение сетки с проверкой индексов
+#     grid = []
+#     missing = None
+#     for i, row in enumerate(rows):
+#         sorted_row = sorted(row, key=lambda x: x[0])
+#         grid.append(sorted_row)
+        
+#         if len(sorted_row) == 2:
+#             # Безопасное определение позиции пропуска
+#             try:
+#                 if i == 0:  # Верхняя строка
+#                     missing_col = 2 if sorted_row[0][0] > grid[1][0][0] else 0
+#                 elif i == 2:  # Нижняя строка
+#                     missing_col = 0 if sorted_row[0][0] < grid[1][0][0] else 2
+#                 else:  # Средняя строка
+#                     missing_col = 1
+#                 missing = (i, missing_col)
+#             except IndexError:
+#                 # Резервный вариант для поврежденных данных
+#                 missing_col = 1
+#                 missing = (i, missing_col)
+    
+#     # Восстановление координат с проверкой границ
+#     row_idx, col_idx = missing
+    
+#     # Расчет координат с использованием соседних строк
+#     try:
+#         dx = grid[1][1][0] - grid[1][0][0]  # Шаг из средней строки
+#     except IndexError:
+#         dx = grid[0][1][0] - grid[0][0][0]  # Используем верхнюю строку
+    
+#     if col_idx == 1:
+#         x = (grid[row_idx][0][0] + grid[row_idx][1][0]) // 2
+#     else:
+#         x = grid[row_idx][0][0] + dx * (col_idx - 0.5)
+    
+#     # Расчет Y-координаты с проверкой соседних строк
+#     try:
+#         y = np.mean([pt[1] for pt in rows[row_idx]]).astype(int)
+#     except:
+#         y = grid[1][0][1]  # Используем среднюю строку как резерв
+    
+#     return [int(x), y]
+
+# def find_missing_point(points):
+#     points = np.array(points)
+    
+#     if len(points) != 8:
+#         raise ValueError("Функция требует ровно 8 точек для восстановления")
+    
+#     # Кластеризация по Y-координатам для определения строк
+#     kmeans = KMeans(n_clusters=3, random_state=0).fit(points[:, 1].reshape(-1, 1))
+#     rows = [[] for _ in range(3)]
+#     for pt, label in zip(points, kmeans.labels_):
+#         rows[label].append(pt.tolist())
+    
+#     print('rows', rows)
+
+#     # Сортируем строки сверху вниз
+#     row_y_means = [np.mean([pt[1] for pt in row]) for row in rows]
+#     rows = [rows[i] for i in np.argsort(row_y_means)[::-1]]
+    
+#     print('rows', rows)
+
+#     # Сортируем точки внутри строк по X и находим пропуски
+#     grid = []
+#     missing = None
+#     for i, row in enumerate(rows):
+#         sorted_row = sorted(row, key=lambda x: x[0])
+#         grid.append(sorted_row)
+        
+#         # Проверяем пропуски в текущей строке
+#         if len(sorted_row) < 3:
+#             missing_col = 2 if sorted_row[-1][0] < 1000 else 0  # Эвристика для определения положения
+#             missing = (i, missing_col)
+    
+#     # Восстанавливаем координаты с проверкой границ
+#     row_idx, col_idx = missing
+    
+#     # Восстановление X-координаты
+#     if len(grid[row_idx]) >= 2:
+#         if col_idx == 0:
+#             x = 2 * grid[row_idx][0][0] - grid[row_idx][1][0]
+#         elif col_idx == 2:
+#             x = 2 * grid[row_idx][1][0] - grid[row_idx][0][0]
+#         else:
+#             x = (grid[row_idx][0][0] + grid[row_idx][-1][0]) // 2
+#     else:
+#         # Используем шаг из соседних строк
+#         x = grid[row_idx][0][0] + (grid[0][1][0] - grid[0][0][0])
+    
+#     # Восстановление Y-координаты
+#     if row_idx == 0:
+#         y = grid[1][col_idx][1] - (grid[2][col_idx][1] - grid[1][col_idx][1])
+#     elif row_idx == 2:
+#         y = grid[1][col_idx][1] + (grid[1][col_idx][1] - grid[0][col_idx][1])
+#     else:
+#         y = (grid[0][col_idx][1] + grid[2][col_idx][1]) // 2
+    
+#     return [int(x), int(y)]
+
 def detect_squares(img, params, intersections, use_debug):
     start_time = time.time()
     
-    # Применяем фильтрацию
-    # filtered_points = filter_close_points(intersections, radius=40)
-    # print(f"filter_close_points completed\t({time.time() - start_time:.2f} s)")
-    
-    # # Отображаем результат
-    # if use_debug:
-    #     # Отображаем усреднённые точки на изображении
-    #     output_img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
-    #     for point in filtered_points:
-    #         cv2.circle(output_img, tuple(point), 5, (0, 0, 255), -1)
-
-    #     cv2.imshow("Filtered Intersections", resize_image_to_fit(output_img))
-    #     cv2.waitKey(0)
-
     if len(intersections) == 0:
         return []
 
     # Применяем усреднение
     start_time = time.time()
-    # print("FIRST")
     averaged_points = average_close_points(img, intersections, use_debug, 
                                             radius=params["first_average"]["radius"], 
                                             min_points=params["first_average"]["min_points"])
@@ -534,40 +770,39 @@ def detect_squares(img, params, intersections, use_debug):
         output_img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
 
         for point in averaged_points:
-            cv2.circle(output_img, tuple(point), 1, (0, 0, 255), -1)
+            cv2.circle(output_img, tuple(point), 5, (0, 0, 255), -1)
 
         cv2.imshow("Filtered and Averaged Intersections1", resize_image_to_fit(output_img))
         cv2.waitKey(0)
 
-    if len(averaged_points) > 1000:
+    if len(averaged_points) > 50:
         print(f"So many points detected! ({len(averaged_points)})")
-        return 1000 * [0]
+        return 50 * [0]
     elif len(averaged_points) == 0:
         print("No points detected!")
         return []
 
-    # print("SECOND")
-    averaged_points = average_close_points(img, averaged_points, use_debug, 
-                                            radius=params["second_average"]["radius"], 
-                                            min_points=params["second_average"]["min_points"])
-    print(f"average_close_points completed\t({time.time() - start_time:.2f} s)")
+    if len(averaged_points) == 8:
+        missing_point = find_missing_point(averaged_points)
+        # row_points, col_points = get_line_points(averaged_points, row, col)
 
-    # Отображаем результат
-    if use_debug:
-        # Отображаем усреднённые точки на изображении
-        output_img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
-        for point in averaged_points:
-            cv2.circle(output_img, tuple(point), 5, (0, 0, 255), -1)
+        averaged_points.append(missing_point)
+        print(f'Found missing point {missing_point}')
+        if use_debug:
+            # Отображаем усреднённые точки на изображении
+            output_img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
 
-        cv2.imshow("Filtered and Averaged Intersections2", resize_image_to_fit(output_img))
-        cv2.waitKey(0)
+            for point in averaged_points:
+                cv2.circle(output_img, tuple(point), 5, (0, 0, 255), -1)
 
-    if len(averaged_points) > 300:
-        print(f"So many points detected! ({len(averaged_points)})")
-        return 300 * [0]
-    elif len(averaged_points) == 0:
-        print("No points detected!")
-        return []
+            cv2.imshow("Found missing point", resize_image_to_fit(output_img))
+            cv2.waitKey(0)
+
+
+
+    averaged_points = np.array(averaged_points)
+
+
 
     # Группируем вершины в квадраты
     squares = []
@@ -602,7 +837,7 @@ def extract_grid(image_path, params):
     img, lines = preprocess_image2(image_path, params["preprocess"], use_debug)
 
     intersections = find_intersections(img, lines, use_debug)
-    return []
+    # return []
     squares = detect_squares(img, params["filter"], intersections, use_debug)
 
     return squares

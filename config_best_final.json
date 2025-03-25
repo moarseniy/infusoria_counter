@@ -1,0 +1,28 @@
+{
+    "settings": {
+        "debug": false
+    },
+    "preprocess": {
+        "clahe": {
+            "to_use": false,
+            "clipLimit": 2.215, 
+            "tileGridSize": 8
+        },
+        "adaptive_thresh": {
+            "to_use": true,
+            "blockSize": 15,
+            "const": 10
+        },
+        "hough": {
+            "threshold": 430, 
+            "minLineLength": 266, 
+            "maxLineGap": 120
+        }
+    },
+    "filter": {
+        "first_average": {
+            "radius": 30,
+            "min_points": 90
+        }
+    }
+}
