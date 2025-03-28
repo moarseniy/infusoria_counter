@@ -3,6 +3,7 @@ import numpy as np
 from functools import reduce
 from operator import mul
 import os, argparse, json
+import csv
 
 from extract_grid_final import extract_grid, resize_image_to_fit
 
@@ -18,56 +19,37 @@ def preprocess_image(orig_img, params):
     
     # Применяем размытие
     img = cv2.GaussianBlur(img, (5, 5), 0)
-    cv2.imshow("Blurred Image", resize_image_to_fit(img))
-    cv2.waitKey(0)
+    # cv2.imshow("Blurred Image", resize_image_to_fit(img))
+    # cv2.waitKey(0)
 
     # Преобразуем изображение в оттенки серого
     img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
     # Применяем инвертированный бинарный порог
     _, img = cv2.threshold(img, 95, 255, cv2.THRESH_BINARY_INV)
-    cv2.imshow("Threshold Image", resize_image_to_fit(img))
-    cv2.waitKey(0)
+    # cv2.imshow("Threshold Image", resize_image_to_fit(img))
+    # cv2.waitKey(0)
 
     # Морфологические операции: сначала открытие, затем закрытие
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
     img = cv2.morphologyEx(img, cv2.MORPH_OPEN, kernel, iterations=2)
-    cv2.imshow("Opened Image", resize_image_to_fit(img))
-    cv2.waitKey(0)
+    # cv2.imshow("Opened Image", resize_image_to_fit(img))
+    # cv2.waitKey(0)
 
     img = cv2.morphologyEx(img, cv2.MORPH_CLOSE, kernel, iterations=1)
-    cv2.imshow("Closed Image", resize_image_to_fit(img))
-    cv2.waitKey(0)
+    # cv2.imshow("Closed Image", resize_image_to_fit(img))
+    # cv2.waitKey(0)
 
     return img
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Поиск точек на изображении.")
-    parser.add_argument("-i", type=str, help="Путь к изображениям.")
-    parser.add_argument("-c", type=str, help="Путь к конфигу с настройками.")
-    args = parser.parse_args()
-    path = args.i
-    config = args.c
-
-    with open(config, "r") as f:
-        params = json.load(f)
-
-    squares = []
-    if os.path.isdir(path):
-        for file in sorted(os.listdir(path)):
-            full_path = os.path.join(path, file)
-            squares = extract_grid(full_path, params)
-    else:
-        squares = extract_grid(args.i, params)
-
-    print(type(squares), squares)
+def run(squares, path, params):
+    squares[0], squares[1] = squares[1], squares[0] # TODO: fix this dirty hack
     img = cv2.imread(path)
     if img is None:
         print("Ошибка загрузки изображения")
         exit(1)
 
     preprocessed = preprocess_image(img, params)
-
 
     # Находим контуры
     contours, _ = cv2.findContours(preprocessed, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
@@ -117,6 +99,60 @@ if __name__ == "__main__":
     for idx, count in enumerate(square_counts, start=1):
         print(f"Квадрат {idx}: количество черных точек = {count}")
 
-    cv2.imshow("Filtered Contours with Colored Grid", resize_image_to_fit(img))
-    cv2.waitKey(0)
-    cv2.destroyAllWindows()
+    # cv2.imshow("Filtered Contours with Colored Grid", resize_image_to_fit(img))
+    # cv2.waitKey(0)
+    # cv2.destroyAllWindows()
+
+    return square_counts
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Поиск точек на изображении.")
+    parser.add_argument("-i", type=str, help="Путь к изображениям.")
+    parser.add_argument("-c", type=str, help="Путь к конфигу с настройками.")
+    args = parser.parse_args()
+    path = args.i
+    config = args.c
+
+    with open(config, "r") as f:
+        params = json.load(f)
+
+    squares = []
+    csv_data = []
+    idx = 0
+    if os.path.isdir(path):
+        for file in sorted(os.listdir(path)):
+            full_path = os.path.join(path, file)
+
+            squares = extract_grid(full_path, params)
+            square_counts = run(squares, full_path, params)
+
+            for count in square_counts:
+                square_number = (idx % 16) + 1  
+                csv_data.append({
+                    "Название": file, 
+                    "Номер квадрата": square_number,
+                    "Количество точек": count
+                })
+                idx += 1
+
+    else:
+        squares = extract_grid(args.i, params)
+        square_counts = run(squares, path, params)
+
+    
+    # for idx, count in enumerate(square_counts):
+    #     # Номер квадрата: (индекс % 16) + 1 (чтобы номера были 1-16)
+    #     square_number = (idx % 16) + 1  
+    #     csv_data.append({
+    #         "Название": ,  # Или f"Квадрат {square_number}"
+    #         "Номер квадрата": square_number,
+    #         "Количество точек": count
+    #     })
+
+    # Запись в CSV
+    with open("results.csv", "w", newline="", encoding="utf-8") as csvfile:
+        fieldnames = ["Название", "Номер квадрата", "Количество точек"]
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        
+        writer.writeheader()
+        writer.writerows(csv_data)

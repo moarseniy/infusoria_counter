@@ -1,6 +1,6 @@
 {
     "settings": {
-        "debug": true
+        "debug": false
     },
     "preprocess": {
         "clahe": {
