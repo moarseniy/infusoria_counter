@@ -784,8 +784,6 @@ def detect_squares(img, params, intersections, use_debug):
 
     if len(averaged_points) == 8:
         missing_point = find_missing_point(averaged_points)
-        # row_points, col_points = get_line_points(averaged_points, row, col)
-
         averaged_points.append(missing_point)
         print(f'Found missing point {missing_point}')
         if use_debug:
@@ -798,11 +796,7 @@ def detect_squares(img, params, intersections, use_debug):
             cv2.imshow("Found missing point", resize_image_to_fit(output_img))
             cv2.waitKey(0)
 
-
-
     averaged_points = np.array(averaged_points)
-
-
 
     # Группируем вершины в квадраты
     squares = []
@@ -832,6 +826,26 @@ def detect_squares(img, params, intersections, use_debug):
     # print("detect_squares finished")
     return filtered_squares
 
+def sort_squares(squares_list):
+    """
+    Сортирует квадраты в порядке: правый нижний → правый верхний → левый верхний → левый нижний.
+    Критерии:
+    1. По убыванию max_x (правые)
+    2. По убыванию max_y (нижние)
+    3. По возрастанию min_x (левые)
+    4. По возрастанию min_y (верхние)
+    """
+    def sort_key(square):
+        x_coords = square[:, 0]
+        y_coords = square[:, 1]
+        max_x = np.max(x_coords)
+        max_y = np.max(y_coords)
+        min_x = np.min(x_coords)
+        min_y = np.min(y_coords)
+        return (-max_x, -max_y, min_x, min_y)
+    
+    return sorted(squares_list, key=sort_key)
+
 def extract_grid(image_path, params):
     use_debug = params["settings"]["debug"]
     img, lines = preprocess_image2(image_path, params["preprocess"], use_debug)
@@ -840,7 +854,7 @@ def extract_grid(image_path, params):
     # return []
     squares = detect_squares(img, params["filter"], intersections, use_debug)
 
-    return squares
+    return sort_squares(squares)
 
 def optimize_params(trial, path):
     params = {
