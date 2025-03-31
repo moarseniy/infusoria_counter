@@ -847,8 +847,8 @@ def sort_squares(squares_list):
     return sorted(squares_list, key=sort_key)
 
 def extract_grid(image_path, params):
-    use_debug = params["settings"]["debug"]
-    img, lines = preprocess_image2(image_path, params["preprocess"], use_debug)
+    use_debug = params["settings"]["grid_debug"]
+    img, lines = preprocess_image2(image_path, params["preprocess"]["grid_detector"], use_debug)
 
     intersections = find_intersections(img, lines, use_debug)
     # return []
