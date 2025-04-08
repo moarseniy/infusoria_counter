@@ -53,17 +53,22 @@ def preprocess_image(orig_img, params, use_debug=False):
     
     img = orig_img.copy()
     
-    # Применяем размытие
-    img = cv2.GaussianBlur(img, (5, 5), 0)
-    if use_debug:   
-        cv2.imshow("Blurred Image", resize_image_to_fit(img))
-        cv2.waitKey(0)
+    if params["gauss"]["to_use"]:
+        # Применяем размытие
+        img = cv2.GaussianBlur(img, (params["gauss"]["kernel"], 
+                                     params["gauss"]["kernel"]), 
+                                    params["gauss"]["sigma"])
+        if use_debug:   
+            cv2.imshow("Blurred Image", resize_image_to_fit(img))
+            cv2.waitKey(0)
 
     # Преобразуем изображение в оттенки серого
     img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
     # Применяем инвертированный бинарный порог
-    _, img = cv2.threshold(img, 120, 255, cv2.THRESH_BINARY_INV) #95
+    _, img = cv2.threshold(img, params["threshold"]["left"], 
+                                params["threshold"]["right"], 
+                                cv2.THRESH_BINARY_INV) #95
 
     # img = cv2.adaptiveThreshold(
     #     img, 255, 
@@ -75,17 +80,23 @@ def preprocess_image(orig_img, params, use_debug=False):
         cv2.imshow("Threshold Image", resize_image_to_fit(img))
         cv2.waitKey(0)
 
-    # Морфологические операции: сначала открытие, затем закрытие
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-    img = cv2.morphologyEx(img, cv2.MORPH_OPEN, kernel, iterations=1)
-    if use_debug:   
-        cv2.imshow("Opened Image", resize_image_to_fit(img))
-        cv2.waitKey(0)
+    if params["open"]["to_use"]:
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, 
+                                        (params["open"]["kernel"], 
+                                         params["open"]["kernel"]))
+        img = cv2.morphologyEx(img, cv2.MORPH_OPEN, kernel, iterations=params["open"]["iterations"])
+        if use_debug:   
+            cv2.imshow("Opened Image", resize_image_to_fit(img))
+            cv2.waitKey(0)
 
-    img = cv2.morphologyEx(img, cv2.MORPH_CLOSE, kernel, iterations=1)
-    if use_debug:   
-        cv2.imshow("Closed Image", resize_image_to_fit(img))
-        cv2.waitKey(0)
+    if params["close"]["to_use"]:
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, 
+                                        (params["close"]["kernel"], 
+                                         params["close"]["kernel"]))
+        img = cv2.morphologyEx(img, cv2.MORPH_CLOSE, kernel, iterations=params["close"]["iterations"])
+        if use_debug:   
+            cv2.imshow("Closed Image", resize_image_to_fit(img))
+            cv2.waitKey(0)
 
     return img
 
@@ -142,8 +153,8 @@ def preprocess_image2(orig_img, params, use_debug=False):
 
     return img
 
-def run(squares, path, params):
-    use_debug = params["settings"]["dots_debug"]
+def run(squares, path, params, visualize_result=False):
+    use_debug = params["debug"]
 
     squares[0], squares[1] = squares[1], squares[0] # TODO: fix this dirty hack
     img = cv2.imread(path)
@@ -151,7 +162,7 @@ def run(squares, path, params):
         print("Ошибка загрузки изображения")
         exit(1)
 
-    preprocessed = preprocess_image(img, params["preprocess"]["dots_detector"], use_debug)
+    preprocessed = preprocess_image(img, params["preprocess"], use_debug)
 
     # contours = apply_watershed(img, preprocessed)
 
@@ -199,15 +210,15 @@ def run(squares, path, params):
                 cv2.circle(img, point, 3, square_colors[idx], -1)
                 break  # Контур учитывается только в одном квадрате
 
-    print(os.path.basename(path))
+    print(f"Результат для {os.path.basename(path)}")
     # Выводим результаты подсчета для каждого квадрата в консоль
     for idx, count in enumerate(square_counts, start=1):
         print(f"Квадрат {idx}: количество черных точек = {count}")
 
-    # if use_debug:
-    cv2.imshow("Filtered Contours with Colored Grid", resize_image_to_fit(img))
-    cv2.waitKey(0)
-    cv2.destroyAllWindows()
+    if visualize_result:
+        cv2.imshow("Filtered Contours with Colored Grid", resize_image_to_fit(img))
+        cv2.waitKey(0)
+        cv2.destroyAllWindows()
 
     return square_counts
 
@@ -226,13 +237,14 @@ if __name__ == "__main__":
     csv_data = []
     idx = 0
     save_csv = False
+    visualize_result = params["settings"]["visualize_result"]
     if os.path.isdir(path):
         save_csv = True
         for file in sorted(os.listdir(path)):
             full_path = os.path.join(path, file)
 
-            squares = extract_grid(full_path, params)
-            square_counts = run(squares, full_path, params)
+            squares = extract_grid(full_path, params["grid_detector"])
+            square_counts = run(squares, full_path, params["dots_detector"], visualize_result)
 
             for count in square_counts:
                 square_number = (idx % 16) + 1  
@@ -244,8 +256,8 @@ if __name__ == "__main__":
                 idx += 1
 
     else:
-        squares = extract_grid(args.i, params)
-        square_counts = run(squares, path, params)
+        squares = extract_grid(args.i, params["grid_detector"])
+        square_counts = run(squares, path, params["dots_detector"], visualize_result)
 
     # Запись в CSV
     if save_csv:

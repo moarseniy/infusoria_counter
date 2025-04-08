@@ -763,8 +763,8 @@ def detect_squares(img, params, intersections, use_debug):
     # Применяем усреднение
     start_time = time.time()
     averaged_points = average_close_points(img, intersections, use_debug, 
-                                            radius=params["first_average"]["radius"], 
-                                            min_points=params["first_average"]["min_points"])
+                                            radius=params["points_filter"]["first_average"]["radius"], 
+                                            min_points=params["points_filter"]["first_average"]["min_points"])
     if use_debug:
         # Отображаем усреднённые точки на изображении
         output_img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
@@ -847,12 +847,12 @@ def sort_squares(squares_list):
     return sorted(squares_list, key=sort_key)
 
 def extract_grid(image_path, params):
-    use_debug = params["settings"]["grid_debug"]
-    img, lines = preprocess_image2(image_path, params["preprocess"]["grid_detector"], use_debug)
+    use_debug = params["debug"]
+    img, lines = preprocess_image2(image_path, params["preprocess"], use_debug)
 
     intersections = find_intersections(img, lines, use_debug)
     # return []
-    squares = detect_squares(img, params["filter"], intersections, use_debug)
+    squares = detect_squares(img, params["postprocess"], intersections, use_debug)
 
     return sort_squares(squares)
 
@@ -923,13 +923,15 @@ if __name__ == "__main__":
     mse_values = []
     if os.path.isdir(path):
         for file in sorted(os.listdir(path)):
-            grid_count = int(file.split('.')[-2])
+            #grid_count = int(file.split('.')[-2])
+            grid_count = 4
+            
             full_path = os.path.join(path, file)
-            squares = extract_grid(full_path, params)
+            squares = extract_grid(full_path, params["grid_detector"])
             count = len(squares)
             mse = (grid_count - count) ** 2
             mse_values.append(mse)
             print(f"({file})Нужно: {grid_count}, получилось: {count}")
         print(f"MSE:", np.mean(mse_values))
     else:
-        squares = extract_grid(args.i, params)
+        squares = extract_grid(args.i, params["grid_detector"])

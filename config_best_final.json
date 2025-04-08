@@ -1,10 +1,10 @@
 {
     "settings": {
-        "grid_debug": false,
-        "dots_debug": false
+        "visualize_result": false
     },
-    "preprocess": {
-        "grid_detector": {
+    "grid_detector": {
+        "debug": false,
+        "preprocess": {
             "clahe": {
                 "to_use": false,
                 "clipLimit": 2.215, 
@@ -21,14 +21,43 @@
                 "maxLineGap": 120
             }
         },
-        "dots_detector": {
-
+        "postprocess": {
+            "points_filter": {
+                "first_average": {
+                    "radius": 30,
+                    "min_points": 90
+                }
+            }
         }
     },
-    "filter": {
-        "first_average": {
-            "radius": 30,
-            "min_points": 90
+    "dots_detector": {
+        "debug": false,
+        "preprocess": {
+            "gauss": {
+                "to_use": true,
+                "kernel": 5,
+                "sigma": 0
+            },
+            "threshold": {
+                "left": 120,
+                "right": 255
+            },
+            "open": {
+                "to_use": true,
+                "kernel": 3,
+                "iterations": 1
+            },
+            "close": {
+                "to_use": true,
+                "kernel": 3,
+                "iterations": 1
+            }
+        },
+        "postprocess": {
+            "area_filter": {
+                "min": 30,
+                "max": 1000
+            }
         }
     }
 }
