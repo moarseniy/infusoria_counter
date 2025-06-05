@@ -65,91 +65,38 @@ def preprocess_image(orig_img, params, use_debug=False):
     # Преобразуем изображение в оттенки серого
     img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
-    # Применяем инвертированный бинарный порог
-    _, img = cv2.threshold(img, params["threshold"]["left"], 
-                                params["threshold"]["right"], 
-                                cv2.THRESH_BINARY_INV) #95
-
-    # img = cv2.adaptiveThreshold(
-    #     img, 255, 
-    #     cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
-    #     cv2.THRESH_BINARY_INV, params["adaptive_thresh"]["blockSize"], 
-    #                            params["adaptive_thresh"]["const"]
-    # )
-    if use_debug:
-        cv2.imshow("Threshold Image", resize_image_to_fit(img))
-        cv2.waitKey(0)
+    if params["adaptive_thresh"]["to_use"]:
+        img = cv2.adaptiveThreshold(
+            img, 255, 
+            cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+            cv2.THRESH_BINARY_INV, params["adaptive_thresh"]["blockSize"], 
+                                   params["adaptive_thresh"]["const"]
+        )
+        if use_debug:
+            cv2.imshow("Threshold Image", resize_image_to_fit(img))
+            cv2.waitKey(0)
 
     if params["open"]["to_use"]:
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, 
-                                        (params["open"]["kernel"], 
-                                         params["open"]["kernel"]))
+        kernel = np.ones((params["open"]["kernel"], 
+                          params["open"]["kernel"]), np.uint8)
+        # kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, 
+        #                                 (params["open"]["kernel"], 
+        #                                  params["open"]["kernel"]))
         img = cv2.morphologyEx(img, cv2.MORPH_OPEN, kernel, iterations=params["open"]["iterations"])
         if use_debug:   
             cv2.imshow("Opened Image", resize_image_to_fit(img))
             cv2.waitKey(0)
 
     if params["close"]["to_use"]:
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, 
-                                        (params["close"]["kernel"], 
-                                         params["close"]["kernel"]))
+        kernel = np.ones((params["close"]["kernel"], 
+                          params["close"]["kernel"]), np.uint8)
+        # kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, 
+        #                                 (params["close"]["kernel"], 
+        #                                  params["close"]["kernel"]))
         img = cv2.morphologyEx(img, cv2.MORPH_CLOSE, kernel, iterations=params["close"]["iterations"])
         if use_debug:   
             cv2.imshow("Closed Image", resize_image_to_fit(img))
             cv2.waitKey(0)
-
-    return img
-
-def preprocess_image2(orig_img, params, use_debug=False):
-    img = orig_img.copy()
-
-    img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    # clahe = cv2.createCLAHE(clipLimit=params["clahe"]["clipLimit"], 
-    #                         tileGridSize=(params["clahe"]["tileGridSize"], 
-    #                                       params["clahe"]["tileGridSize"]))
-    # img = clahe.apply(img)
-    # if use_debug:
-    #     cv2.imshow("clahe", resize_image_to_fit(img))
-    #     cv2.waitKey(0)
-
-    # Гауссово размытие
-    # if params["gauss"]["to_use"]:
-    #     img = cv2.GaussianBlur(img, (params["gauss"]["kernel"], params["gauss"]["kernel"]), 0)
-    #     if use_debug:
-    #         cv2.imshow("GaussianBlur", resize_image_to_fit(img))
-    #         cv2.waitKey(0)
-        
-
-    img = cv2.adaptiveThreshold(
-        img, 255, 
-        cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
-        cv2.THRESH_BINARY_INV, params["adaptive_thresh"]["blockSize"], 
-                               params["adaptive_thresh"]["const"]
-    )
-    if use_debug:
-        cv2.imshow("adaptiveThreshold", resize_image_to_fit(img))
-        cv2.waitKey(0)
-
-    # img = cv2.bitwise_not(img) 
-    # if use_debug:
-    #     cv2.imshow("bitwise_not", resize_image_to_fit(img))
-    #     cv2.waitKey(0)
-    
-    # _, img = cv2.threshold(
-    #     img, 
-    #     40,  # Глобальный порог
-    #     255,                            # Максимальное значение
-    #     cv2.THRESH_BINARY_INV            # Тип бинаризации
-    # )
-    # if use_debug:
-    #     cv2.imshow("threshold", resize_image_to_fit(img))
-    #     cv2.waitKey(0)
-
-    # kernel = np.ones((3, 3), np.uint8)
-    # img = cv2.morphologyEx(img, cv2.MORPH_CLOSE, kernel, iterations=3)
-    # if use_debug:
-    #     cv2.imshow("close", resize_image_to_fit(img))
-    #     cv2.waitKey(0)
 
     return img
 
@@ -170,10 +117,12 @@ def run(squares, path, params, visualize_result=False):
     contours, _ = cv2.findContours(preprocessed, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
 
     # Фильтруем контуры по площади (пороговые значения подбираются экспериментально)
+    min_area = params["postprocess"]["area_filter"]["min"]
+    max_area = params["postprocess"]["area_filter"]["max"]
     filteredContours = []
     for contour in contours:
         area = cv2.contourArea(contour)
-        if 30 < area < 1000:
+        if min_area < area < max_area:
             filteredContours.append(contour)
 
     # Создаем копию исходного изображения для отрисовки
@@ -220,6 +169,13 @@ def run(squares, path, params, visualize_result=False):
         cv2.waitKey(0)
         cv2.destroyAllWindows()
 
+    return square_counts
+
+def count_dots(img_path, params):
+    visualize_result = params["settings"]["visualize_result"]
+    squares = extract_grid(img_path, params["grid_detector"])
+    print(squares)
+    square_counts = run(squares, img_path, params["dots_detector"], visualize_result)
     return square_counts
 
 if __name__ == "__main__":

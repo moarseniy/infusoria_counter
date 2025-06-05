@@ -1,13 +1,33 @@
+import os, time, json, random
 import cv2
 import numpy as np
-import random
 from itertools import combinations
 import argparse
-import os, time, json
 import optuna
+import pandas as pd
 
 from sklearn.cluster import DBSCAN
 from skimage.morphology import skeletonize
+from sklearn.metrics import mean_squared_error, mean_absolute_error
+
+from typing import List, Dict, Tuple, Optional
+import glob
+
+def autocontrast(image, cutoff=2.0):
+    """
+    Усиление контраста: делает светлые пиксели белее, темные - темнее.
+    :param image: Входное изображение (grayscale)
+    :param cutoff: Процент отсечения с обоих концов гистограммы (0-100)
+    :return: Улучшенное изображение
+    """
+    # Рассчитываем пороги на основе гистограммы
+    low = np.percentile(image, cutoff)
+    high = np.percentile(image, 100 - cutoff)
+    
+    # Растягиваем диапазон интенсивностей
+    enhanced = np.clip((image.astype(np.float32) - low) * (255.0 / (high - low)), 0, 255)
+    
+    return enhanced.astype(np.uint8)
 
 def resize_image_to_fit(image, max_width=1280, max_height=720):
     """
@@ -21,6 +41,68 @@ def resize_image_to_fit(image, max_width=1280, max_height=720):
     height, width = image.shape[:2]
     scale = min(max_width / width, max_height / height)
     return cv2.resize(image, (int(width * scale), int(height * scale)))
+
+def preprocess_image2_test(image_path, params, use_debug):
+    start_time = time.time()
+    img = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
+    
+    if params["clahe"]["to_use"]:
+        clahe = cv2.createCLAHE(clipLimit=params["clahe"]["clipLimit"], 
+                                tileGridSize=(params["clahe"]["tileGridSize"], 
+                                              params["clahe"]["tileGridSize"]))
+        img = clahe.apply(img)
+        if use_debug:
+            cv2.imshow("clahe", resize_image_to_fit(img))
+            cv2.waitKey(0)
+
+    kernel = np.ones((5, 5), np.uint8)
+    img = cv2.morphologyEx(img, cv2.MORPH_CLOSE, kernel, iterations=4)
+    if use_debug:
+        cv2.imshow("close", resize_image_to_fit(img))
+        cv2.waitKey(0)
+
+    # img = autocontrast(img, cutoff=2.0)
+    # cv2.imshow("autocontrast", resize_image_to_fit(img))
+    # cv2.waitKey(0)
+
+    # img = cv2.equalizeHist(img)
+    # cv2.imshow("equalizeHist", resize_image_to_fit(img))
+    # cv2.waitKey(0)
+
+    if params["adaptive_thresh"]["to_use"]:
+        # Адаптивная бинаризация
+        img = cv2.adaptiveThreshold(
+            img, 255, 
+            cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+            cv2.THRESH_BINARY, params["adaptive_thresh"]["blockSize"], 
+                                   params["adaptive_thresh"]["const"]
+        )
+        if use_debug:
+            cv2.imshow("adaptiveThreshold", resize_image_to_fit(img))
+            cv2.waitKey(0)
+
+    # _, img = cv2.threshold(img, 254, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    # cv2.imshow("threshold", resize_image_to_fit(img))
+    # cv2.waitKey(0)
+
+    # img = cv2.dilate(img, kernel=np.ones((3, 3), np.uint8), iterations=1)
+    # if use_debug:
+    #     cv2.imshow("dilate", resize_image_to_fit(img))
+    #     cv2.waitKey(0)
+
+    # img = skeletonize(img // 255) 
+    # cv2.imshow("skeletonize", resize_image_to_fit(img))
+    # cv2.waitKey(0)
+
+    lines = cv2.HoughLinesP(
+        img, 
+        rho=1, 
+        theta=np.pi/180, 
+        threshold=params["hough"]["threshold"], 
+        minLineLength=params["hough"]["minLineLength"], 
+        maxLineGap=params["hough"]["maxLineGap"]
+    )
+    return img, lines
 
 def preprocess_image2(image_path, params, use_debug):
     start_time = time.time()
@@ -293,7 +375,7 @@ def find_intersections(img, lines, use_debug):
     # print("find_intersections started")
     # Находим все пересечения линий
     intersections = []
-    if lines is not None and len(lines) and len(lines) < 1000:
+    if lines is not None and len(lines) and len(lines) < 1300:
         for i in range(len(lines)):
             for j in range(i + 1, len(lines)):
                 line1 = lines[i][0]
@@ -319,8 +401,9 @@ def find_intersections(img, lines, use_debug):
 
     # Преобразуем список пересечений в массив NumPy
     intersections = np.array(intersections)
-
-    print(f"find_intersections finished\t({time.time() - start_time:.2f} s)")
+    if use_debug:
+        print(f"find_intersections finished\t({time.time() - start_time:.2f} s)")
+    
     return intersections
 
 
@@ -785,8 +868,9 @@ def detect_squares(img, params, intersections, use_debug):
     if len(averaged_points) == 8:
         missing_point = find_missing_point(averaged_points)
         averaged_points.append(missing_point)
-        print(f'Found missing point {missing_point}')
+        
         if use_debug:
+            print(f'Found missing point {missing_point}')
             # Отображаем усреднённые точки на изображении
             output_img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
 
@@ -856,82 +940,173 @@ def extract_grid(image_path, params):
 
     return sort_squares(squares)
 
-def optimize_params(trial, path):
+def optimize_params(trial, input_path, output_path):
     params = {
         "settings": {
-            "debug": False
+            "visualize_result": False
         },
-        "preprocess": {
-            "clahe": {
-                "to_use": True, #trial.suggest_categorical("clahe_to_use", [True, False]),
-                "clipLimit": 2.215, #trial.suggest_float("clipLimit", 1.0, 8.0), 
-                "tileGridSize": 8, #trial.suggest_int("tileGridSize", 1, 9)
+        "grid_detector": {
+            "debug": False,
+            "preprocess": {
+                "clahe": {
+                    "to_use": False, #trial.suggest_categorical("clahe_to_use", [True, False]),
+                    "clipLimit": 2.215, #trial.suggest_float("clipLimit", 1.0, 8.0), 
+                    "tileGridSize": 8, #trial.suggest_int("tileGridSize", 1, 9)
+                },
+                "adaptive_thresh": {
+                    "to_use": True, #trial.suggest_categorical("adaptive_thresh_to_use", [True, False]),
+                    "blockSize": trial.suggest_int("blockSize", 3, 55, step=2),
+                    "const": trial.suggest_int("const", 1, 15)
+                },
+                "hough": {
+                    "threshold": trial.suggest_int("threshold", 10, 1000),
+                    "minLineLength": trial.suggest_int("minLineLength", 10, 700), 
+                    "maxLineGap": trial.suggest_int("maxLineGap", 5, 100)
+                }
             },
-            "adaptive_thresh": {
-                "to_use": True, #trial.suggest_categorical("adaptive_thresh_to_use", [True, False]),
-                "blockSize": 11, #trial.suggest_int("blockSize", 3, 21, step=2),
-                "const": 10, #trial.suggest_int("const", 1, 15)
-            },
-            "hough": {
-                "threshold": 246, #trial.suggest_int("threshold", 10, 1000),
-                "minLineLength": 119, #trial.suggest_int("minLineLength", 10, 700), 
-                "maxLineGap": 67 #trial.suggest_int("maxLineGap", 5, 100)
-            }
-        },
-        "filter": {
-            "first_average": {
-                "radius": trial.suggest_int("radius1", 1, 20),
-                "min_points": trial.suggest_int("min_points1", 1, 5)    
-            },
-            "second_average": {
-                "radius": trial.suggest_int("radius2", 1, 40),
-                "min_points": trial.suggest_int("min_points2", 2, 10)
+            "postprocess": {
+                "points_filter": {
+                    "first_average": {
+                        "radius": 30, # trial.suggest_int("radius1", 1, 20),
+                        "min_points": 50
+                    }
+                }
             }
         }
     }
 
-    mse_values = []
-    for file in sorted(os.listdir(path)):
-        grid_count = int(file.split('.')[-2])
-        full_path = os.path.join(path, file)
-        squares = extract_grid(full_path, params)
-        count = len(squares)
-        mse = (grid_count - count) ** 2
-        mse_values.append(mse)
-    return np.mean(mse_values)
+    metrics = process_image_folder(input_path, output_path, params["grid_detector"])
+
+    return metrics['MSE']
+
+def find_images(path: str) -> List[str]:
+    """Рекурсивно находит все изображения в указанной папке"""
+    image_extensions = ['.png', '.jpg', '.jpeg', '.bmp', '.tiff']
+    image_files = []
+    
+    if os.path.isfile(path):
+        if os.path.splitext(path)[1].lower() in image_extensions:
+            return [path]
+        else:
+            return []
+    
+    for root, _, files in os.walk(path):
+        for file in files:
+            if os.path.splitext(file)[1].lower() in image_extensions:
+                image_files.append(os.path.join(root, file))
+    
+    return sorted(image_files)
+
+def process_single_image(image_path: str, grid_params: dict) -> float:
+    """Обрабатывает одно изображение и возвращает результат"""
+    try:
+        squares = grid_params(image_path)
+        result = len(squares)
+        print(f"Изображение: {os.path.basename(image_path)} -> Результат: {result:.4f}")
+        return result
+    except Exception as e:
+        print(f"Ошибка обработки изображения {image_path}: {e}")
+        return float('nan')
+
+def process_image_folder(folder_path: str, output_csv: str, grid_params: dict) -> Dict[str, float]:
+    """Обрабатывает все изображения в папке и сохраняет результаты"""
+    image_files = find_images(folder_path)
+    if not image_files:
+        print("Изображения не найдены!")
+        return pd.DataFrame()
+    
+    results = []
+    for img_path in image_files:
+        try:
+            squares = extract_grid(img_path, grid_params)
+            result = len(squares)
+
+            img_name = os.path.basename(img_path)
+            results.append({
+                'Название': img_name,
+                'Результат': result,
+                'Ground_Truth': 4.0
+            })
+            if result != 4 and grid_params['debug']:
+                print(f"Неверно: {img_path} -> {result:.4f}")
+        except Exception as e:
+            print(f"Ошибка обработки {img_path}: {e}")
+    
+    # Создаем DataFrame с результатами
+    results_df = pd.DataFrame(results)
+    
+    if output_csv:
+        # Сохраняем результаты
+        results_df.to_csv(output_csv, index=False)
+        print(f"\nРезультаты сохранены в: {output_csv}")
+
+    metrics = calculate_metrics(results_df)
+
+    return metrics
+
+def calculate_metrics(results_df: pd.DataFrame) -> Dict[str, float]:
+    try:
+        # Вычисление метрик
+        metrics = {
+            'MSE': mean_squared_error(results_df['Результат'], results_df['Ground_Truth']),
+            'MAE': mean_absolute_error(results_df['Результат'], results_df['Ground_Truth']),
+            'RMSE': np.sqrt(mean_squared_error(results_df['Результат'], results_df['Ground_Truth'])),
+            'StdDev': np.std(results_df['Результат'] - 4.0)
+        }
+        
+        # Дополнительные метрики
+        metrics['Accuracy'] = np.mean(np.isclose(results_df['Результат'], 4.0, atol=0.5))
+        
+        print("\nМетрики качества (GT=4.0):")
+        print("--------------------------")
+        for metric, value in metrics.items():
+            print(f"{metric}: {value:.4f}")
+        
+        with open('metrics.txt', 'w') as f:
+            f.write("Метрики качества (Ground Truth=4.0)\n")
+            f.write("----------------------------------\n")
+            for metric, value in metrics.items():
+                f.write(f"{metric}: {value:.4f}\n")
+        
+        return metrics
+    except Exception as e:
+        print(f"Ошибка при расчете метрик: {e}")
+        return {}
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Поиск квадратов на изображении.")
-    parser.add_argument("-i", type=str, help="Путь к изображениям.")
-    parser.add_argument("-c", type=str, help="Путь к конфигу с настройками.")
+    parser.add_argument("-i", "--input", required=True, type=str, 
+                        help="Путь к изображениям.")
+    parser.add_argument("-c", "--config", required=False, type=str, 
+                        help="Путь к конфигу с настройками.")
+    parser.add_argument('-o', '--output', required=False, default='', type=str,
+                        help='Путь для сохранения результатов (при обработке папки).')
     args = parser.parse_args()
-    path = args.i
-    config = args.c
+    input_path = args.input
+    config_path = args.config
+    output_path = args.output
 
-    # start_time = time.time()
-    # study = optuna.create_study(direction="minimize")
-    # study.optimize(lambda trial: optimize_params(trial, path), n_trials=100)
-    # print(f"Лучшие параметры: {study.best_params}")
-    # print(f"Лучшее MSE: {study.best_value}")
-    # print(f"Elapsed time:{time.time() - start_time:.2f} s")
+    if not config_path:
+        start_time = time.time()
+        study = optuna.create_study(direction="minimize")
+        study.optimize(lambda trial: optimize_params(trial, input_path, output_path), n_trials=100)
+        print(f"Лучшие параметры: {study.best_params}")
+        print(f"Лучшее MSE: {study.best_value}")
+        print(f"Elapsed time:{time.time() - start_time:.2f} s")
 
-    # exit(-1)
-
-    with open(config, "r") as f:
-        params = json.load(f)
-
-    mse_values = []
-    if os.path.isdir(path):
-        for file in sorted(os.listdir(path)):
-            #grid_count = int(file.split('.')[-2])
-            grid_count = 4
-            
-            full_path = os.path.join(path, file)
-            squares = extract_grid(full_path, params["grid_detector"])
-            count = len(squares)
-            mse = (grid_count - count) ** 2
-            mse_values.append(mse)
-            print(f"({file})Нужно: {grid_count}, получилось: {count}")
-        print(f"MSE:", np.mean(mse_values))
     else:
-        squares = extract_grid(args.i, params["grid_detector"])
+        with open(config_path, "r") as f:
+            params = json.load(f)
+
+        # Определяем тип ввода (файл или папка)
+        if os.path.isfile(input_path):
+            # Обработка одиночного изображения
+            result = process_single_image(input_path, params["grid_detector"])
+
+        elif os.path.isdir(input_path):
+            # Обработка папки с изображениями
+            metrics = process_image_folder(input_path, output_path, params["grid_detector"])
+        else:
+            print(f"Ошибка: путь не существует или недоступен - {input_path}")
+            exit(1)
