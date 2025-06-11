@@ -6,6 +6,10 @@ import argparse
 import optuna
 import pandas as pd
 
+from sklearn.cluster import KMeans
+from sklearn.decomposition import PCA
+from scipy.spatial import KDTree
+
 from sklearn.cluster import DBSCAN
 from skimage.morphology import skeletonize
 from sklearn.metrics import mean_squared_error, mean_absolute_error
@@ -13,21 +17,15 @@ from sklearn.metrics import mean_squared_error, mean_absolute_error
 from typing import List, Dict, Tuple, Optional
 import glob
 
-def autocontrast(image, cutoff=2.0):
-    """
-    Усиление контраста: делает светлые пиксели белее, темные - темнее.
-    :param image: Входное изображение (grayscale)
-    :param cutoff: Процент отсечения с обоих концов гистограммы (0-100)
-    :return: Улучшенное изображение
-    """
-    # Рассчитываем пороги на основе гистограммы
-    low = np.percentile(image, cutoff)
-    high = np.percentile(image, 100 - cutoff)
-    
-    # Растягиваем диапазон интенсивностей
-    enhanced = np.clip((image.astype(np.float32) - low) * (255.0 / (high - low)), 0, 255)
-    
-    return enhanced.astype(np.uint8)
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from functools import partial
+from tqdm import tqdm
+
+import itertools
+import math
+from collections import defaultdict
+from typing import List, Tuple, Optional, Union
+
 
 def resize_image_to_fit(image, max_width=1280, max_height=720):
     """
@@ -42,69 +40,7 @@ def resize_image_to_fit(image, max_width=1280, max_height=720):
     scale = min(max_width / width, max_height / height)
     return cv2.resize(image, (int(width * scale), int(height * scale)))
 
-def preprocess_image2_test(image_path, params, use_debug):
-    start_time = time.time()
-    img = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
-    
-    if params["clahe"]["to_use"]:
-        clahe = cv2.createCLAHE(clipLimit=params["clahe"]["clipLimit"], 
-                                tileGridSize=(params["clahe"]["tileGridSize"], 
-                                              params["clahe"]["tileGridSize"]))
-        img = clahe.apply(img)
-        if use_debug:
-            cv2.imshow("clahe", resize_image_to_fit(img))
-            cv2.waitKey(0)
-
-    kernel = np.ones((5, 5), np.uint8)
-    img = cv2.morphologyEx(img, cv2.MORPH_CLOSE, kernel, iterations=4)
-    if use_debug:
-        cv2.imshow("close", resize_image_to_fit(img))
-        cv2.waitKey(0)
-
-    # img = autocontrast(img, cutoff=2.0)
-    # cv2.imshow("autocontrast", resize_image_to_fit(img))
-    # cv2.waitKey(0)
-
-    # img = cv2.equalizeHist(img)
-    # cv2.imshow("equalizeHist", resize_image_to_fit(img))
-    # cv2.waitKey(0)
-
-    if params["adaptive_thresh"]["to_use"]:
-        # Адаптивная бинаризация
-        img = cv2.adaptiveThreshold(
-            img, 255, 
-            cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
-            cv2.THRESH_BINARY, params["adaptive_thresh"]["blockSize"], 
-                                   params["adaptive_thresh"]["const"]
-        )
-        if use_debug:
-            cv2.imshow("adaptiveThreshold", resize_image_to_fit(img))
-            cv2.waitKey(0)
-
-    # _, img = cv2.threshold(img, 254, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    # cv2.imshow("threshold", resize_image_to_fit(img))
-    # cv2.waitKey(0)
-
-    # img = cv2.dilate(img, kernel=np.ones((3, 3), np.uint8), iterations=1)
-    # if use_debug:
-    #     cv2.imshow("dilate", resize_image_to_fit(img))
-    #     cv2.waitKey(0)
-
-    # img = skeletonize(img // 255) 
-    # cv2.imshow("skeletonize", resize_image_to_fit(img))
-    # cv2.waitKey(0)
-
-    lines = cv2.HoughLinesP(
-        img, 
-        rho=1, 
-        theta=np.pi/180, 
-        threshold=params["hough"]["threshold"], 
-        minLineLength=params["hough"]["minLineLength"], 
-        maxLineGap=params["hough"]["maxLineGap"]
-    )
-    return img, lines
-
-def preprocess_image2(image_path, params, use_debug):
+def preprocess_image2(image_path, params, print_debug=False, draw_debug=False):
     start_time = time.time()
     img = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
 
@@ -121,12 +57,6 @@ def preprocess_image2(image_path, params, use_debug):
         #     cv2.imshow("clahe", resize_image_to_fit(img))
         #     cv2.waitKey(0)
 
-    # Гауссово размытие
-    # if params["gauss"]["to_use"]:
-    #     img = cv2.GaussianBlur(img, (params["gauss"]["kernel"], params["gauss"]["kernel"]), 0)
-    #     if use_debug:
-    #         cv2.imshow("GaussianBlur", resize_image_to_fit(img))
-    #         cv2.waitKey(0)
         
     if params["adaptive_thresh"]["to_use"]:
         # Адаптивная бинаризация
@@ -136,35 +66,14 @@ def preprocess_image2(image_path, params, use_debug):
             cv2.THRESH_BINARY_INV, params["adaptive_thresh"]["blockSize"], 
                                    params["adaptive_thresh"]["const"]
         )
-        # if use_debug:
-        #     cv2.imshow("adaptiveThreshold", resize_image_to_fit(img))
-        #     cv2.waitKey(0)
-
-    # img = cv2.bitwise_not(img) 
-    # if use_debug:
-    #     cv2.imshow("bitwise_not", resize_image_to_fit(img))
-    #     cv2.waitKey(0)
-    
-    # _, img = cv2.threshold(
-    #     img, 
-    #     40,  # Глобальный порог
-    #     255,                            # Максимальное значение
-    #     cv2.THRESH_BINARY_INV            # Тип бинаризации
-    # )
-    # if use_debug:
-    #     cv2.imshow("threshold", resize_image_to_fit(img))
-    #     cv2.waitKey(0)
 
     kernel = np.ones((3, 3), np.uint8)
     img = cv2.morphologyEx(img, cv2.MORPH_CLOSE, kernel, iterations=3)
-    if use_debug:
+
+    if draw_debug:
         cv2.imshow("close", resize_image_to_fit(img))
         cv2.waitKey(0)
 
-    # img = skeletonize(img // 255) 
-    # cv2.imshow("skeletonize", resize_image_to_fit(img))
-    # cv2.waitKey(0)
-
     lines = cv2.HoughLinesP(
         img, 
         rho=1, 
@@ -175,182 +84,6 @@ def preprocess_image2(image_path, params, use_debug):
     )
     return img, lines
 
-    # Закрытие: соединяем близко расположенные компоненты в единую область
-    # kernel_close2 = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
-    # img = cv2.morphologyEx(img, cv2.MORPH_OPEN, kernel_close2, iterations=1)
-    # if use_debug:
-    #     cv2.imshow("open", resize_image_to_fit(img))
-    #     cv2.waitKey(0)
-
-    # img = cv2.medianBlur(img, 3)
-    # if use_debug:
-    #     cv2.imshow("Median Blur", resize_image_to_fit(img))
-    #     cv2.waitKey(0)
-
-
-
-    # if params["dilate"]["to_use"]:
-    #     # Закрытие: соединяем близко расположенные компоненты в единую область
-    #     kernel_dilate = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 
-    #                                                                3))
-    #     img = cv2.dilate(img, kernel_dilate, iterations=1)
-    #     if use_debug:
-    #         cv2.imshow("dilate", resize_image_to_fit(img))
-    #         cv2.waitKey(0)
-
-    # # Детектор границ Canny
-    # img = cv2.Canny(img, 90, 150, apertureSize=3)
-    # if use_debug:
-    #     cv2.imshow("edges", resize_image_to_fit(img))
-    #     cv2.waitKey(0)
-
-    # kernel = np.ones((3, 3), np.uint8)
-    # img = cv2.erode(img, kernel, iterations=1)
-    # if use_debug:
-    #     cv2.imshow("erode", resize_image_to_fit(img))
-    #     cv2.waitKey(0)
-
-    kernel = np.ones((3, 3), np.uint8)
-    img = cv2.dilate(img, kernel, iterations=1)
-    if use_debug:
-        cv2.imshow("dilate", resize_image_to_fit(img))
-        cv2.waitKey(0)
-
-
-    if params["close"]["to_use"]:
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (params["close"]["kernel"], 
-                                                            params["close"]["kernel"]))
-        img = cv2.morphologyEx(img, cv2.MORPH_CLOSE, kernel, iterations=params["close"]["iterations"])
-        if use_debug:
-            cv2.imshow("Morphological Closing", resize_image_to_fit(img))
-            cv2.waitKey(0)
-
-    if params["findContours"]["to_use"]:
-        contours, _ = cv2.findContours(img, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
-        for cnt in contours:
-            if cv2.contourArea(cnt) < params["findContours"]["area"]:
-                cv2.drawContours(img, [cnt], 0, 0, -1)
-        if use_debug:
-            cv2.imshow("findContours", resize_image_to_fit(img))
-            cv2.waitKey(0)
-
-    if params["dilate"]["to_use"]:
-        # Закрытие: соединяем близко расположенные компоненты в единую область
-        kernel_dilate = cv2.getStructuringElement(cv2.MORPH_RECT, (params["dilate"]["kernel"], 
-                                                                   params["dilate"]["kernel"]))
-        img = cv2.dilate(img, kernel_dilate, iterations=params["dilate"]["iterations"])
-        if use_debug:
-            cv2.imshow("dilate", resize_image_to_fit(img))
-            cv2.waitKey(0)
-
-    # if params["erode"]["to_use"]:
-    #     kernel_erode = cv2.getStructuringElement(cv2.MORPH_RECT, (params["erode"]["kernel"], 
-    #                                                               params["erode"]["kernel"]))
-    #     img = cv2.erode(img, kernel_erode, iterations=params["erode"]["iterations"])
-    #     if use_debug:
-    #         cv2.imshow("erode", resize_image_to_fit(img))
-    #         cv2.waitKey(0)
-    
-    # Детекция линий с оптимизированными параметрами
-    lines = cv2.HoughLinesP(
-        img, 
-        rho=1, 
-        theta=np.pi/180, 
-        threshold=params["hough"]["threshold"], 
-        minLineLength=params["hough"]["minLineLength"], 
-        maxLineGap=params["hough"]["maxLineGap"]
-    )
-    
-    print(f"preprocess_image finished\t({time.time() - start_time:.2f} s)")
-
-    return img, lines
-
-def preprocess_image(image_path, params, use_debug):
-    start_time = time.time()
-    # print("preprocess_image started")
-    # Загрузка изображения
-    img = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
-    if img is None:
-        print("Не удалось загрузить изображение.")
-        exit()
-
-    if params["clahe"]["to_use"]:
-        clahe = cv2.createCLAHE(clipLimit=params["clahe"]["clipLimit"], 
-                                tileGridSize=(params["clahe"]["tileGridSize"], 
-                                              params["clahe"]["tileGridSize"]))
-        img = clahe.apply(img)
-        if use_debug:
-            cv2.imshow("clahe", resize_image_to_fit(img))
-            cv2.waitKey(0)
-
-    if params["close1"]["to_use"]:
-        kernel_close1 = cv2.getStructuringElement(cv2.MORPH_RECT, (params["close1"]["kernel"], 
-                                                                   params["close1"]["kernel"]))
-        img = cv2.morphologyEx(img, cv2.MORPH_CLOSE, kernel_close1, iterations=params["close1"]["iterations"])
-        if use_debug:
-            cv2.imshow("closed1", resize_image_to_fit(img))
-            cv2.waitKey(0)
-
-    if params["gauss"]["to_use"]:
-        # Применяем гауссово размытие для уменьшения шума
-        img = cv2.GaussianBlur(img, (params["gauss"]["kernel"], 
-                                          params["gauss"]["kernel"]), 0)
-        if use_debug:
-            cv2.imshow("blur", resize_image_to_fit(img))
-            cv2.waitKey(0)
-
-    if params["canny"]["to_use"]:
-        # Детектор границ Canny
-        img = cv2.Canny(img, params["canny"]["left"], 
-                                params["canny"]["right"], 
-                                apertureSize=3)
-        if use_debug:
-            cv2.imshow("edges", resize_image_to_fit(img))
-            cv2.waitKey(0)
-
-    if params["erode1"]["to_use"]:
-        kernel_erode1 = cv2.getStructuringElement(cv2.MORPH_RECT, (params["erode1"]["kernel"], 
-                                                                   params["erode1"]["kernel"]))
-        img = cv2.erode(img, kernel_erode1, iterations=params["erode1"]["iterations"])
-        if use_debug:
-            cv2.imshow("erode1", resize_image_to_fit(img))
-            cv2.waitKey(0)
-
-    if params["dilate"]["to_use"]:
-        # Дилатация: расширяем линии, чтобы группы линий сливались
-        kernel_dilate = cv2.getStructuringElement(cv2.MORPH_RECT, (params["dilate"]["kernel"], 
-                                                                   params["dilate"]["kernel"]))
-        img = cv2.dilate(img, kernel_dilate, iterations=params["dilate"]["iterations"])
-        if use_debug:
-            cv2.imshow("dilated", resize_image_to_fit(img))
-            cv2.waitKey(0)
-
-    if params["close2"]["to_use"]:
-        # Закрытие: соединяем близко расположенные компоненты в единую область
-        kernel_close2 = cv2.getStructuringElement(cv2.MORPH_RECT, (params["close2"]["kernel"], 
-                                                                   params["close2"]["kernel"]))
-        img = cv2.morphologyEx(img, cv2.MORPH_OPEN, kernel_close2, iterations=params["close2"]["iterations"])
-        if use_debug:
-            cv2.imshow("closed", resize_image_to_fit(img))
-            cv2.waitKey(0)
-
-    if params["erode2"]["to_use"]:
-        # Эрозия: уменьшаем размер линий
-        kernel_erode2 = cv2.getStructuringElement(cv2.MORPH_RECT, (params["erode2"]["kernel"], 
-                                                                   params["erode2"]["kernel"]))
-        img = cv2.erode(img, kernel_erode2, iterations=params["erode2"]["iterations"])
-        if use_debug:
-            cv2.imshow("erode2", resize_image_to_fit(img))
-            cv2.waitKey(0)
-
-    # Поиск линий с использованием преобразования Хафа
-    lines = cv2.HoughLinesP(img, rho=1, 
-                                    theta=np.pi / 180, 
-                                    threshold=params["hough"]["threshold"], 
-                                    minLineLength=params["hough"]["minLineLength"], 
-                                    maxLineGap=params["hough"]["maxLineGap"])
-    print(f"preprocess_image finished\t({time.time() - start_time:.2f} s)")
-    return img, lines
 
 # Функция для нахождения пересечения двух линий
 def find_intersection_two_lines(line1, line2):
@@ -370,7 +103,7 @@ def find_intersection_two_lines(line1, line2):
         return (int(x), int(y))
     return None
 
-def find_intersections(img, lines, use_debug):
+def find_intersections(img, lines, print_debug=False, draw_debug=False):
     start_time = time.time() 
     # print("find_intersections started")
     # Находим все пересечения линий
@@ -385,7 +118,7 @@ def find_intersections(img, lines, use_debug):
                     intersections.append(intersection)
 
         # Отображаем результат
-        if use_debug:
+        if draw_debug:
             # Отображаем пересечения на изображении
             output_img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
             for point in intersections:
@@ -394,25 +127,26 @@ def find_intersections(img, lines, use_debug):
             cv2.imshow("Intersections", resize_image_to_fit(output_img))
             cv2.waitKey(0)
             cv2.destroyAllWindows()
-    elif use_debug and lines is not None:
+    elif print_debug and lines is not None:
         print(f"Found {len(lines)} lines!")
-    else:
+    elif print_debug:
         print("No lines found!")
 
     # Преобразуем список пересечений в массив NumPy
     intersections = np.array(intersections)
-    if use_debug:
-        print(f"find_intersections finished\t({time.time() - start_time:.2f} s)")
+    # if print_debug:
+    #     print(f"find_intersections finished\t({time.time() - start_time:.2f} s)")
     
     return intersections
 
 
 # Функция для проверки, образуют ли четыре точки квадрат
 def is_square(points, angle_tolerance=30, side_tolerance=0.1):
+    # print(points)
     # Вычисляем расстояния между всеми парами точек
     dists = [np.linalg.norm(points[i] - points[j]) for i in range(4) for j in range(i + 1, 4)]
     dists.sort()
-
+    # print("DISTS")
     # В квадрате должно быть 4 равные стороны и 2 равные диагонали
     side = dists[0]
     diagonal = dists[-1]
@@ -499,16 +233,8 @@ def filter_overlapping_squares(squares):
                 
     return [square for idx, square in enumerate(squares) if idx not in to_remove]
 
-def filter_close_points(points, radius=20):
-    filtered_points = []
-    for point in points:
-        # Проверяем, есть ли уже близкая точка в filtered_points
-        if not any(np.linalg.norm(point - fp) < radius for fp in filtered_points):
-            filtered_points.append(point)
-    return np.array(filtered_points)
 
-
-def average_close_points(img, points, use_debug=False, radius=20, min_points=2):
+def average_close_points(img, points, print_debug=False, draw_debug=False, radius=20, min_points=2):
     """
     Кластеризует точки с помощью DBSCAN, усредняет их и отрисовывает на изображении.
     
@@ -587,24 +313,6 @@ def sort_points(points):
     # Объединяем точки в нужном порядке
     return np.array([upper_points[0], upper_points[1], lower_points[0], lower_points[1]])
 
-from sklearn.cluster import KMeans
-from sklearn.decomposition import PCA
-from scipy.spatial import KDTree
-
-def get_line_points(points, row, col):
-    points = np.array(points)
-    
-    # Получаем все точки из строки (по Y)
-    sorted_y = points[np.argsort(-points[:, 1])]
-    y_values = sorted(np.unique(points[:, 1]), reverse=True)
-    row_points = points[points[:, 1] == y_values[row]]
-    
-    # Получаем все точки из столбца (по X)
-    sorted_x = points[np.argsort(points[:, 0])]
-    x_values = sorted(np.unique(points[:, 0]))
-    col_points = points[points[:, 0] == x_values[col]]
-    
-    return row_points.tolist(), col_points.tolist()
 
 def find_two_lines_intersection(line1_points, line2_points):
     """
@@ -710,134 +418,8 @@ def find_missing_point(points):
 
     return np.array(res_missing_point, dtype=int)
 
-    # row_y = expected_points[row * 3][1]
-    # # Находим все точки с Y-координатой близкой к строке
-    # y_distances = np.abs(points[:, 1] - row_y)
-    # close_points = points[y_distances < np.median(y_distances) * 1.5]
-    # print("close_points", close_points)
 
-    
-
-# def find_missing_point(points):
-#     points = np.array(points)
-    
-#     # Кластеризация по Y для определения строк
-#     kmeans_rows = KMeans(n_clusters=3, random_state=0).fit(points[:, 1].reshape(-1, 1))
-#     rows = [[] for _ in range(3)]
-#     for pt, label in zip(points, kmeans_rows.labels_):
-#         rows[label].append(pt)
-    
-#     # Убедимся, что есть ровно 3 строки
-#     rows = [r for r in rows if len(r) > 0]
-#     if len(rows) != 3:
-#         raise ValueError("Невозможно определить 3 строки в сетке")
-    
-#     # Сортировка строк сверху вниз
-#     row_y_means = [np.mean([pt[1] for pt in row]) for row in rows]
-#     rows = [rows[i] for i in np.argsort(row_y_means)[::-1]]
-    
-#     # Построение сетки с проверкой индексов
-#     grid = []
-#     missing = None
-#     for i, row in enumerate(rows):
-#         sorted_row = sorted(row, key=lambda x: x[0])
-#         grid.append(sorted_row)
-        
-#         if len(sorted_row) == 2:
-#             # Безопасное определение позиции пропуска
-#             try:
-#                 if i == 0:  # Верхняя строка
-#                     missing_col = 2 if sorted_row[0][0] > grid[1][0][0] else 0
-#                 elif i == 2:  # Нижняя строка
-#                     missing_col = 0 if sorted_row[0][0] < grid[1][0][0] else 2
-#                 else:  # Средняя строка
-#                     missing_col = 1
-#                 missing = (i, missing_col)
-#             except IndexError:
-#                 # Резервный вариант для поврежденных данных
-#                 missing_col = 1
-#                 missing = (i, missing_col)
-    
-#     # Восстановление координат с проверкой границ
-#     row_idx, col_idx = missing
-    
-#     # Расчет координат с использованием соседних строк
-#     try:
-#         dx = grid[1][1][0] - grid[1][0][0]  # Шаг из средней строки
-#     except IndexError:
-#         dx = grid[0][1][0] - grid[0][0][0]  # Используем верхнюю строку
-    
-#     if col_idx == 1:
-#         x = (grid[row_idx][0][0] + grid[row_idx][1][0]) // 2
-#     else:
-#         x = grid[row_idx][0][0] + dx * (col_idx - 0.5)
-    
-#     # Расчет Y-координаты с проверкой соседних строк
-#     try:
-#         y = np.mean([pt[1] for pt in rows[row_idx]]).astype(int)
-#     except:
-#         y = grid[1][0][1]  # Используем среднюю строку как резерв
-    
-#     return [int(x), y]
-
-# def find_missing_point(points):
-#     points = np.array(points)
-    
-#     if len(points) != 8:
-#         raise ValueError("Функция требует ровно 8 точек для восстановления")
-    
-#     # Кластеризация по Y-координатам для определения строк
-#     kmeans = KMeans(n_clusters=3, random_state=0).fit(points[:, 1].reshape(-1, 1))
-#     rows = [[] for _ in range(3)]
-#     for pt, label in zip(points, kmeans.labels_):
-#         rows[label].append(pt.tolist())
-    
-#     print('rows', rows)
-
-#     # Сортируем строки сверху вниз
-#     row_y_means = [np.mean([pt[1] for pt in row]) for row in rows]
-#     rows = [rows[i] for i in np.argsort(row_y_means)[::-1]]
-    
-#     print('rows', rows)
-
-#     # Сортируем точки внутри строк по X и находим пропуски
-#     grid = []
-#     missing = None
-#     for i, row in enumerate(rows):
-#         sorted_row = sorted(row, key=lambda x: x[0])
-#         grid.append(sorted_row)
-        
-#         # Проверяем пропуски в текущей строке
-#         if len(sorted_row) < 3:
-#             missing_col = 2 if sorted_row[-1][0] < 1000 else 0  # Эвристика для определения положения
-#             missing = (i, missing_col)
-    
-#     # Восстанавливаем координаты с проверкой границ
-#     row_idx, col_idx = missing
-    
-#     # Восстановление X-координаты
-#     if len(grid[row_idx]) >= 2:
-#         if col_idx == 0:
-#             x = 2 * grid[row_idx][0][0] - grid[row_idx][1][0]
-#         elif col_idx == 2:
-#             x = 2 * grid[row_idx][1][0] - grid[row_idx][0][0]
-#         else:
-#             x = (grid[row_idx][0][0] + grid[row_idx][-1][0]) // 2
-#     else:
-#         # Используем шаг из соседних строк
-#         x = grid[row_idx][0][0] + (grid[0][1][0] - grid[0][0][0])
-    
-#     # Восстановление Y-координаты
-#     if row_idx == 0:
-#         y = grid[1][col_idx][1] - (grid[2][col_idx][1] - grid[1][col_idx][1])
-#     elif row_idx == 2:
-#         y = grid[1][col_idx][1] + (grid[1][col_idx][1] - grid[0][col_idx][1])
-#     else:
-#         y = (grid[0][col_idx][1] + grid[2][col_idx][1]) // 2
-    
-#     return [int(x), int(y)]
-
-def detect_squares(img, params, intersections, use_debug):
+def detect_squares(img, params, intersections, print_debug=False, draw_debug=False, visualize_result=False):
     start_time = time.time()
     
     if len(intersections) == 0:
@@ -845,32 +427,52 @@ def detect_squares(img, params, intersections, use_debug):
 
     # Применяем усреднение
     start_time = time.time()
-    averaged_points = average_close_points(img, intersections, use_debug, 
+    averaged_points = average_close_points(img, intersections, print_debug, draw_debug, 
                                             radius=params["points_filter"]["first_average"]["radius"], 
                                             min_points=params["points_filter"]["first_average"]["min_points"])
-    if use_debug:
+    if draw_debug:
         # Отображаем усреднённые точки на изображении
         output_img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
 
         for point in averaged_points:
             cv2.circle(output_img, tuple(point), 5, (0, 0, 255), -1)
 
-        cv2.imshow("Filtered and Averaged Intersections1", resize_image_to_fit(output_img))
+        cv2.imshow("Filtered and Averaged Intersections", resize_image_to_fit(output_img))
         cv2.waitKey(0)
 
-    if len(averaged_points) > 50:
+    if len(averaged_points) > 100 and print_debug:
         print(f"So many points detected! ({len(averaged_points)})")
-        return 50 * [0]
-    elif len(averaged_points) == 0:
+        return 100 * [0]
+    elif len(averaged_points) == 0 and print_debug:
         print("No points detected!")
         return []
+    
+    squares_list, points_list = [], []
+
+    # pts = [ (float(pt[0]), float(pt[1])) for pt in averaged_points ]
+    # squares_list, points_list = find_chain_of_squares(pts)
+    # print(squares_list, points_list)
+
+    # if draw_debug:
+    #     # Отображаем квадраты на исходном изображении
+    #     output_img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+    #     for square in squares_list:
+    #         color = (random.randint(0, 255), random.randint(0, 255), random.randint(0, 255))  # Случайный цвет
+    #         square = square.reshape((-1, 1, 2))
+    #         cv2.polylines(output_img, [square], isClosed=True, color=color, thickness=2)
+
+    #     cv2.imshow("Temporary detected Squares", resize_image_to_fit(output_img))
+    #     cv2.waitKey(0)
+    #     cv2.destroyAllWindows()
 
     if len(averaged_points) == 8:
         missing_point = find_missing_point(averaged_points)
         averaged_points.append(missing_point)
         
-        if use_debug:
+        if print_debug:
             print(f'Found missing point {missing_point}')
+
+        if draw_debug:
             # Отображаем усреднённые точки на изображении
             output_img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
 
@@ -880,35 +482,40 @@ def detect_squares(img, params, intersections, use_debug):
             cv2.imshow("Found missing point", resize_image_to_fit(output_img))
             cv2.waitKey(0)
 
+        # squares_list, points_list = find_chain_of_squares(points_list)
+
     averaged_points = np.array(averaged_points)
 
-    # Группируем вершины в квадраты
-    squares = []
+    # # Группируем вершины в квадраты
     for comb in combinations(range(len(averaged_points)), 4):  # Перебираем все комбинации из 4 точек
         
         points = np.array([averaged_points[comb[0]], averaged_points[comb[1]], averaged_points[comb[2]], averaged_points[comb[3]]])
         sorted_points = sort_points(points)
         if is_square(sorted_points):
-            squares.append(sorted_points)
+            squares_list.append(sorted_points)
 
-    filtered_squares = filter_overlapping_squares(squares)
+    squares_list = filter_overlapping_squares(squares_list)
+    
+    # if print_debug:
+    #     print(f"Найдено {len(squares_list)} квадратов сетки!")
+
+    # print("squares_list", squares_list, visualize_result)
 
     # Отображаем результат
-    if use_debug:
-        print(f"Найдено {len(filtered_squares)} квадратов сетки!")
+    if visualize_result:
         # Отображаем квадраты на исходном изображении
-        output_img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
-        for square in filtered_squares:
+        # output_img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+        for square in squares_list:
             color = (random.randint(0, 255), random.randint(0, 255), random.randint(0, 255))  # Случайный цвет
             square = square.reshape((-1, 1, 2))
-            cv2.polylines(output_img, [square], isClosed=True, color=color, thickness=2)
+            cv2.polylines(img, [square], isClosed=True, color=color, thickness=2)
 
-        cv2.imshow("Detected Squares", resize_image_to_fit(output_img))
+        cv2.imshow("Finally detected Squares", resize_image_to_fit(img))
         cv2.waitKey(0)
         cv2.destroyAllWindows()
 
     # print("detect_squares finished")
-    return filtered_squares
+    return squares_list
 
 def sort_squares(squares_list):
     """
@@ -930,13 +537,13 @@ def sort_squares(squares_list):
     
     return sorted(squares_list, key=sort_key)
 
-def extract_grid(image_path, params):
-    use_debug = params["debug"]
-    img, lines = preprocess_image2(image_path, params["preprocess"], use_debug)
+def extract_grid(image_path, params, visualize_result=False):
+    print_debug, draw_debug = params["print_debug"], params["draw_debug"]
+    img, lines = preprocess_image2(image_path, params["preprocess"], print_debug, draw_debug)
 
-    intersections = find_intersections(img, lines, use_debug)
+    intersections = find_intersections(img, lines, print_debug, draw_debug)
     # return []
-    squares = detect_squares(img, params["postprocess"], intersections, use_debug)
+    squares = detect_squares(img, params["postprocess"], intersections, print_debug, draw_debug, visualize_result)
 
     return sort_squares(squares)
 
@@ -1041,7 +648,7 @@ def process_image_folder(folder_path: str, output_csv: str, grid_params: dict) -
                 'Результат': result,
                 'Ground_Truth': 4.0
             })
-            if result != 4 and grid_params['debug']:
+            if result != 4 and grid_params['print_debug']:
                 print(f"Неверно: {img_path} -> {result:.4f}")
         except Exception as e:
             print(f"Ошибка обработки {img_path}: {e}")
@@ -1197,13 +804,16 @@ if __name__ == "__main__":
         with open(config_path, "r") as f:
             params = json.load(f)
 
+        visualize_result = params["settings"]["visualize_result"]
+
         # Определяем тип ввода (файл или папка)
         if os.path.isfile(input_path):
             # Обработка одиночного изображения
-            result = process_single_image(input_path, params["grid_detector"])
+            result = process_single_image(input_path, params["grid_detector"], visualize_result)
 
         elif os.path.isdir(input_path):
             # Обработка папки с изображениями
+            # result = process_image_folder_parallel(input_path, output_path, params["grid_detector"])
             metrics = process_image_folder(input_path, output_path, params["grid_detector"])
         else:
             print(f"Ошибка: путь не существует или недоступен - {input_path}")
