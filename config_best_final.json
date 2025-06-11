@@ -1,9 +1,10 @@
 {
     "settings": {
-        "visualize_result": true
+        "visualize_result": false
     },
     "grid_detector": {
-        "debug": false,
+        "print_debug": true,
+        "draw_debug": false,
         "preprocess": {
             "clahe": {
                 "to_use": false,
@@ -12,26 +13,32 @@
             },
             "adaptive_thresh": {
                 "to_use": true,
-                "blockSize": 15,
-                "const": 6
+                "blockSize": 51,
+                "const": 8
+            },
+            "close": {
+                "to_use": true,
+                "kernel": 3,
+                "iterations": 4
             },
             "hough": {
-                "threshold": 666, 
-                "minLineLength": 266, 
-                "maxLineGap": 120
+                "threshold": 400, 
+                "minLineLength": 380, 
+                "maxLineGap": 100
             }
         },
         "postprocess": {
             "points_filter": {
                 "first_average": {
                     "radius": 30,
-                    "min_points": 50
+                    "min_points": 5
                 }
             }
         }
     },
     "dots_detector": {
-        "debug": true,
+        "print_debug": true,
+        "draw_debug": true,
         "preprocess": {
             "gauss": {
                 "to_use": false,

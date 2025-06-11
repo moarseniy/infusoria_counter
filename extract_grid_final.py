@@ -67,11 +67,17 @@ def preprocess_image2(image_path, params, print_debug=False, draw_debug=False):
                                    params["adaptive_thresh"]["const"]
         )
 
-    kernel = np.ones((3, 3), np.uint8)
-    img = cv2.morphologyEx(img, cv2.MORPH_CLOSE, kernel, iterations=3)
+    if params["close"]["to_use"]:
+        kernel = np.ones((params["close"]["kernel"], 
+                          params["close"]["kernel"]), np.uint8)
+        img = cv2.morphologyEx(img, cv2.MORPH_CLOSE, kernel, 
+                               iterations=params["close"]["iterations"])
+
+    blurred = cv2.GaussianBlur(img, (15, 15), 0)  
+    _, img = cv2.threshold(blurred, 220, 255, cv2.THRESH_BINARY)  
 
     if draw_debug:
-        cv2.imshow("close", resize_image_to_fit(img))
+        cv2.imshow("Preprocessed image", resize_image_to_fit(img))
         cv2.waitKey(0)
 
     lines = cv2.HoughLinesP(
