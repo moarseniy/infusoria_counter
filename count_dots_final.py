@@ -49,7 +49,7 @@ def apply_watershed(orig_img, preprocessed_img):
 
     return contours
 
-def preprocess_image(orig_img, params, use_debug=False):
+def preprocess_image(orig_img, params, print_debug=False, draw_debug=False):
     
     img = orig_img.copy()
     
@@ -58,7 +58,7 @@ def preprocess_image(orig_img, params, use_debug=False):
         img = cv2.GaussianBlur(img, (params["gauss"]["kernel"], 
                                      params["gauss"]["kernel"]), 
                                     params["gauss"]["sigma"])
-        if use_debug:   
+        if draw_debug:   
             cv2.imshow("Blurred Image", resize_image_to_fit(img))
             cv2.waitKey(0)
 
@@ -72,7 +72,7 @@ def preprocess_image(orig_img, params, use_debug=False):
             cv2.THRESH_BINARY_INV, params["adaptive_thresh"]["blockSize"], 
                                    params["adaptive_thresh"]["const"]
         )
-        if use_debug:
+        if draw_debug:
             cv2.imshow("Threshold Image", resize_image_to_fit(img))
             cv2.waitKey(0)
 
@@ -83,7 +83,7 @@ def preprocess_image(orig_img, params, use_debug=False):
         #                                 (params["open"]["kernel"], 
         #                                  params["open"]["kernel"]))
         img = cv2.morphologyEx(img, cv2.MORPH_OPEN, kernel, iterations=params["open"]["iterations"])
-        if use_debug:   
+        if draw_debug:   
             cv2.imshow("Opened Image", resize_image_to_fit(img))
             cv2.waitKey(0)
 
@@ -94,14 +94,14 @@ def preprocess_image(orig_img, params, use_debug=False):
         #                                 (params["close"]["kernel"], 
         #                                  params["close"]["kernel"]))
         img = cv2.morphologyEx(img, cv2.MORPH_CLOSE, kernel, iterations=params["close"]["iterations"])
-        if use_debug:   
+        if draw_debug:   
             cv2.imshow("Closed Image", resize_image_to_fit(img))
             cv2.waitKey(0)
 
     return img
 
 def run(squares, path, params, visualize_result=False):
-    use_debug = params["debug"]
+    print_debug, draw_debug = params["print_debug"], params["draw_debug"]
 
     squares[0], squares[1] = squares[1], squares[0] # TODO: fix this dirty hack
     img = cv2.imread(path)
@@ -109,7 +109,7 @@ def run(squares, path, params, visualize_result=False):
         print("Ошибка загрузки изображения")
         exit(1)
 
-    preprocessed = preprocess_image(img, params["preprocess"], use_debug)
+    preprocessed = preprocess_image(img, params["preprocess"], print_debug, draw_debug)
 
     # contours = apply_watershed(img, preprocessed)
 
@@ -163,7 +163,7 @@ def run(squares, path, params, visualize_result=False):
     # Выводим результаты подсчета для каждого квадрата в консоль
     for idx, count in enumerate(square_counts, start=1):
         print(f"Квадрат {idx}: количество черных точек = {count}")
-
+        
     if visualize_result:
         cv2.imshow("Filtered Contours with Colored Grid", resize_image_to_fit(img))
         cv2.waitKey(0)
