@@ -975,7 +975,7 @@ def optimize_params(trial, input_path, output_path):
         }
     }
 
-    metrics = process_image_folder(input_path, output_path, params["grid_detector"])
+    metrics = process_image_folder_parallel(input_path, output_path, params["grid_detector"])
 
     return metrics['MSE']
 
@@ -997,16 +997,30 @@ def find_images(path: str) -> List[str]:
     
     return sorted(image_files)
 
-def process_single_image(image_path: str, grid_params: dict) -> float:
+def process_single_image(img_path, grid_params, visualize_result=False):
     """Обрабатывает одно изображение и возвращает результат"""
     try:
-        squares = grid_params(image_path)
+        squares = extract_grid(img_path, grid_params, visualize_result)
         result = len(squares)
-        print(f"Изображение: {os.path.basename(image_path)} -> Результат: {result:.4f}")
-        return result
+        img_name = os.path.basename(img_path)
+        
+        debug_info = None
+        if result != 4 and grid_params.get('debug', False):
+            debug_info = f"Неверно: {img_path} -> {result}"
+        
+        return {
+            'Название': img_name,
+            'Результат': result,
+            'Ground_Truth': 4.0,
+            'debug_info': debug_info
+        }
     except Exception as e:
-        print(f"Ошибка обработки изображения {image_path}: {e}")
-        return float('nan')
+        return {
+            'Название': os.path.basename(img_path),
+            'Результат': 1000,
+            'Ground_Truth': 4.0,
+            'error': str(e)
+        }
 
 def process_image_folder(folder_path: str, output_csv: str, grid_params: dict) -> Dict[str, float]:
     """Обрабатывает все изображения в папке и сохраняет результаты"""
@@ -1041,6 +1055,90 @@ def process_image_folder(folder_path: str, output_csv: str, grid_params: dict) -
         print(f"\nРезультаты сохранены в: {output_csv}")
 
     metrics = calculate_metrics(results_df)
+    metrics.setdefault('MSE', float('10000'))
+
+    return metrics
+
+def process_image_folder_parallel(folder_path: str, output_csv: str, grid_params: dict) -> Dict[str, float]:
+    """Обрабатывает все изображения в папке параллельно и сохраняет результаты"""
+    image_files = find_images(folder_path)
+    if not image_files:
+        print("Изображения не найдены!")
+        return {}
+    
+    results = []
+    debug_messages = []
+    errors = []
+    
+    # Создаем частичную функцию с фиксированными параметрами
+    process_func = partial(process_single_image, grid_params=grid_params)
+    
+    # Используем ProcessPoolExecutor для параллельной обработки
+    with ProcessPoolExecutor(max_workers=3) as executor:
+        # Запускаем задачи
+        futures = {executor.submit(process_func, img_path): img_path for img_path in image_files}
+        
+        # Обрабатываем результаты по мере их появления
+        for future in tqdm(as_completed(futures), total=len(image_files), desc="Обработка изображений"):
+            img_path = futures[future]
+            try:
+                result = future.result()
+                
+                if result['Результат'] == 0 or result['Результат'] >= 20:
+                    # Отменяем все ещё незавершённые задачи
+                    for f in futures:
+                        if not f.done():
+                            f.cancel()
+                    # Прерываем функцию и возвращаем 1000
+                    break 
+
+                results.append(result)
+                
+                # Собираем отладочные сообщения
+                if 'debug_info' in result and result['debug_info']:
+                    debug_messages.append(result['debug_info'])
+                
+                # Собираем ошибки
+                if 'error' in result:
+                    errors.append(f"Ошибка обработки {img_path}: {result['error']}")
+            
+            except Exception as e:
+                error_msg = f"Неожиданная ошибка при обработке {img_path}: {str(e)}"
+                errors.append(error_msg)
+                results.append({
+                    'Название': os.path.basename(img_path),
+                    'Результат': 10000,
+                    'Ground_Truth': 4.0,
+                    'error': str(e)
+                })
+    
+    executor.shutdown(wait=False)
+
+    # Выводим все отладочные сообщения
+    if grid_params.get('debug', False) and debug_messages:
+        print("\nОтладочная информация:")
+        for msg in debug_messages:
+            print(msg)
+    
+    # Выводим все ошибки
+    if errors:
+        print("\nОшибки обработки:")
+        for error in errors:
+            print(error)
+    
+    # Создаем DataFrame с результатами
+    results_df = pd.DataFrame(results)
+    
+    # Удаляем вспомогательные колонки
+    results_df = results_df.drop(columns=['debug_info', 'error'], errors='ignore')
+    
+    if output_csv:
+        # Сохраняем результаты
+        results_df.to_csv(output_csv, index=False)
+        print(f"\nРезультаты сохранены в: {output_csv}")
+    
+    metrics = calculate_metrics(results_df)
+    metrics.setdefault('MSE', float('10000'))
 
     return metrics
 
